@@ -51,27 +51,36 @@ def get_site_id():
 def hdrs():
     return {"Authorization": f"Bearer {get_token()}", "Content-Type": "application/json"}
 
+def _checar(r):
+    """Levanta erro com o corpo da resposta da Graph API (mensagem real do problema)."""
+    if not r.ok:
+        try:
+            detalhe = r.json().get("error", {}).get("message", r.text)
+        except Exception:
+            detalhe = r.text
+        raise Exception(f"Graph API {r.status_code}: {detalhe}")
+
 def lista_items(lista, filtro=""):
     site_id = get_site_id()
     url = f"https://graph.microsoft.com/v1.0/sites/{site_id}/lists/{lista}/items?expand=fields&$top=500"
     if filtro:
         url += f"&$filter={filtro}"
     r = requests.get(url, headers=hdrs())
-    r.raise_for_status()
+    _checar(r)
     return r.json().get("value", [])
 
 def criar_item(lista, fields):
     site_id = get_site_id()
     url = f"https://graph.microsoft.com/v1.0/sites/{site_id}/lists/{lista}/items"
     r = requests.post(url, headers=hdrs(), json={"fields": fields})
-    r.raise_for_status()
+    _checar(r)
     return r.json()
 
 def patch_item(lista, item_id, fields):
     site_id = get_site_id()
     url = f"https://graph.microsoft.com/v1.0/sites/{site_id}/lists/{lista}/items/{item_id}/fields"
     r = requests.patch(url, headers=hdrs(), json=fields)
-    r.raise_for_status()
+    _checar(r)
     return r.json()
 
 # ─────────────────────────────────────────────
