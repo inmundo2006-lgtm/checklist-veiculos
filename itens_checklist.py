@@ -1,10 +1,4 @@
 ITENS_CHECKLIST = {
-    "🔵 Documentação": [
-        "CRLV / Documento do veículo",
-        "CNH do motorista (válida)",
-        "Seguro obrigatório (DPVAT)",
-        "Licenciamento em dia",
-    ],
     "🔴 Pneus e Rodas": [
         "Pneu dianteiro esquerdo — estado e calibragem",
         "Pneu dianteiro direito — estado e calibragem",
@@ -81,6 +75,19 @@ ITENS_CHECKLIST = {
         "Freio de serviço — eficiência",
         "Freio de estacionamento — eficiência",
         "Ruídos ao frear",
+    ],
+    "🔩 Câmbio, Motor e Embreagem": [
+        "Câmbio — troca de marchas (suavidade e engate)",
+        "Câmbio — ruídos estranhos ao engatar",
+        "Câmbio — vazamento de óleo",
+        "Embreagem — curso e folga do pedal",
+        "Embreagem — patinação ao acelerar",
+        "Embreagem — ruídos ao pisar/soltar",
+        "Motor — ruídos anormais em marcha lenta",
+        "Motor — trepidação / falhas de aceleração",
+        "Motor — fumaça excessiva no escapamento",
+        "Motor — dificuldade na partida a frio",
+        "Motor — coxins / suportes do motor",
     ],
 }
 
