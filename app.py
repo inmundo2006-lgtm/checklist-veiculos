@@ -65,9 +65,14 @@ def lista_items(lista, filtro=""):
     url = f"https://graph.microsoft.com/v1.0/sites/{site_id}/lists/{lista}/items?expand=fields&$top=500"
     if filtro:
         url += f"&$filter={filtro}"
-    r = requests.get(url, headers=hdrs())
-    _checar(r)
-    return r.json().get("value", [])
+    itens = []
+    while url:
+        r = requests.get(url, headers=hdrs())
+        _checar(r)
+        data = r.json()
+        itens.extend(data.get("value", []))
+        url = data.get("@odata.nextLink")
+    return itens
 
 def criar_item(lista, fields):
     site_id = get_site_id()
