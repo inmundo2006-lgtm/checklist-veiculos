@@ -98,9 +98,7 @@ def carregar_frotas():
         "cc_nome":     i["fields"].get("CCNome",""),
         "frente_nome": i["fields"].get("FrenteNome",""),
         "status":      i["fields"].get("Status","Ativo"),
-    } for i in items
-      if i["fields"].get("Tipo","") in ("Veículo","Caminhão","Apoio")
-      and i["fields"].get("Status","Ativo") == "Ativo"]
+    } for i in items]
 
 @st.cache_data(ttl=30)
 def carregar_checklists(frota_id=""):
