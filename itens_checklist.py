@@ -78,11 +78,8 @@ ITENS_CHECKLIST = {
     ],
     "🔩 Câmbio, Motor e Embreagem": [
         "Câmbio — troca de marchas (suavidade e engate)",
-        "Câmbio — ruídos estranhos ao engatar",
         "Câmbio — vazamento de óleo",
-        "Embreagem — curso e folga do pedal",
-        "Embreagem — patinação ao acelerar",
-        "Embreagem — ruídos ao pisar/soltar",
+        "Embreagem",
         "Motor — ruídos anormais em marcha lenta",
         "Motor — trepidação / falhas de aceleração",
         "Motor — fumaça excessiva no escapamento",

@@ -24,9 +24,9 @@ LISTA_FOTOS       = st.secrets.get("LISTA_FOTOS",       "ChecklistFotos")
 LISTA_PECAS       = st.secrets.get("LISTA_PECAS",       "SolicitacaoPecas")
 
 TIPOS_VEICULO = ["Carro", "Caminhonete", "Van / Sprinter"]
-AVALIACOES    = ["✅ Bom", "⚠️ Regular", "❌ Ruim"]
-AVAL_COR      = {"✅ Bom": "#d1fae5", "⚠️ Regular": "#fef3c7", "❌ Ruim": "#fee2e2"}
-AVAL_TX       = {"✅ Bom": "#065f46", "⚠️ Regular": "#92400e", "❌ Ruim": "#991b1b"}
+AVALIACOES    = ["✅ Bom", "⚠️ Regular", "❌ Ruim", "➖ Não tem"]
+AVAL_COR      = {"✅ Bom": "#d1fae5", "⚠️ Regular": "#fef3c7", "❌ Ruim": "#fee2e2", "➖ Não tem": "#f3f4f6"}
+AVAL_TX       = {"✅ Bom": "#065f46", "⚠️ Regular": "#92400e", "❌ Ruim": "#991b1b", "➖ Não tem": "#4b5563"}
 
 # ─────────────────────────────────────────────
 # GRAPH API
@@ -294,8 +294,8 @@ with aba_novo:
         with c3: km_atual  = st.number_input("🛣️ KM atual", min_value=0, step=1)
 
         motivo = st.selectbox("📝 Motivo da entrada na oficina", [
-            "Manutenção preventiva", "Manutenção corretiva",
-            "Revisão periódica", "Troca de óleo", "Checklist de rotina",
+            "Manutenção corretiva",
+            "Revisão periódica", "Checklist de rotina",
             "Após acidente / sinistro", "Outro",
         ])
         if motivo == "Outro":
@@ -419,6 +419,7 @@ with aba_novo:
         n_bom  = sum(1 for v in avals.values() if v == "✅ Bom")
         n_reg  = sum(1 for v in avals.values() if v == "⚠️ Regular")
         n_ruim = sum(1 for v in avals.values() if v == "❌ Ruim")
+        n_na   = sum(1 for v in avals.values() if v == "➖ Não tem")
         total  = len(avals)
 
         if n_ruim == 0 and n_reg == 0:
@@ -436,11 +437,12 @@ with aba_novo:
             f'<div class="resultado-box" style="background:{res_cor};color:{res_tx}">'
             f'{resultado}</div>', unsafe_allow_html=True)
 
-        c1,c2,c3,c4 = st.columns(4)
+        c1,c2,c3,c4,c5 = st.columns(5)
         c1.metric("Total de itens", total)
         c2.metric("✅ Bom", n_bom)
         c3.metric("⚠️ Regular", n_reg)
         c4.metric("❌ Ruim", n_ruim)
+        c5.metric("➖ Não tem", n_na)
 
         st.divider()
 
@@ -455,7 +457,7 @@ with aba_novo:
         st.divider()
 
         # Itens com problema
-        itens_problema = {k:v for k,v in avals.items() if v != "✅ Bom"}
+        itens_problema = {k:v for k,v in avals.items() if v not in ("✅ Bom", "➖ Não tem")}
         if itens_problema:
             st.markdown("**⚠️ Itens com problema:**")
             for chave, aval in itens_problema.items():
