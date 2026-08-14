@@ -382,12 +382,10 @@ with aba_novo:
                                             key=key_obs, placeholder="Descreva o problema")
                         itens_state[f"{cat}||{item}__obs"] = obs
                     with foto_col:
-                        foto = st.camera_input(f"📷 Foto obrigatória", key=key_foto)
+                        foto = st.camera_input(f"📷 Foto (opcional)", key=key_foto)
                         if foto:
                             fotos_state[f"{cat}||{item}"] = base64.b64encode(foto.read()).decode()
                             st.success("Foto capturada ✅")
-                        elif f"{cat}||{item}" not in fotos_state:
-                            st.warning("⚠️ Foto obrigatória")
 
                 st.markdown('<hr style="margin:4px 0;border-color:#f3f4f6">', unsafe_allow_html=True)
 
@@ -396,24 +394,13 @@ with aba_novo:
                                   placeholder="Anotações adicionais sobre o veículo...")
         st.session_state.obs_geral = obs_geral
 
-        # Verifica fotos obrigatórias
-        itens_ruins = [k for k,v in itens_state.items()
-                       if v == "❌ Ruim" and not k.endswith("__obs")]
-        fotos_faltando = [k for k in itens_ruins if k not in fotos_state]
-
         col_back, col_next = st.columns(2)
         with col_back:
             if st.button("◀️ Voltar", use_container_width=True):
                 st.session_state.etapa = "identificacao"; st.rerun()
         with col_next:
             if st.button("▶️ Revisar e Finalizar", type="primary", use_container_width=True):
-                if fotos_faltando:
-                    st.error(f"⚠️ {len(fotos_faltando)} item(ns) marcado(s) como Ruim precisam de foto obrigatória.")
-                    for f in fotos_faltando[:3]:
-                        cat, item = f.split("||")
-                        st.warning(f"📷 Foto faltando: **{cat}** → {item}")
-                else:
-                    st.session_state.etapa = "revisao"; st.rerun()
+                st.session_state.etapa = "revisao"; st.rerun()
 
     # ════════════════════════════════════════
     # ETAPA 3 — REVISÃO
