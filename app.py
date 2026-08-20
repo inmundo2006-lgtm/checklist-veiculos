@@ -1,6 +1,6 @@
 import streamlit as st
 import streamlit.components.v1 as components
-import requests, json, time, base64
+import requests, json, time, base64, re
 from datetime import datetime
 import io
 from openpyxl import Workbook
@@ -88,6 +88,22 @@ def patch_item(lista, item_id, fields):
     _checar(r)
     return r.json()
 
+def upload_foto_biblioteca(frota_nome, item_nome, foto_bytes):
+    """Sobe a foto como arquivo de verdade na biblioteca de documentos do site
+    (aparece com miniatura navegando direto no SharePoint) e devolve a URL."""
+    site_id = get_site_id()
+    pasta = re.sub(r'[\\/:*?"<>|]', "-", frota_nome).strip()
+    nome_item = re.sub(r'[\\/:*?"<>|]', "-", item_nome).strip()[:60]
+    nome_arquivo = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{nome_item}.jpg"
+    caminho = f"FotosChecklist/{pasta}/{nome_arquivo}"
+    url = f"https://graph.microsoft.com/v1.0/sites/{site_id}/drive/root:/{caminho}:/content"
+    r = requests.put(
+        url,
+        headers={"Authorization": f"Bearer {get_token()}", "Content-Type": "image/jpeg"},
+        data=foto_bytes)
+    _checar(r)
+    return r.json().get("webUrl", "")
+
 # ─────────────────────────────────────────────
 # CARREGAR FROTAS DO KANBAN
 # ─────────────────────────────────────────────
@@ -136,6 +152,26 @@ def invalidar():
     carregar_frotas.clear()
     carregar_checklists.clear()
     carregar_pecas.clear()
+    carregar_fotos.clear()
+
+@st.cache_data(ttl=30)
+def carregar_fotos(checklist_id=""):
+    items = lista_items(LISTA_FOTOS)
+    fotos = [{
+        "id":           i["id"],
+        "checklist_id": i["fields"].get("ChecklistId",""),
+        "frota_nome":   i["fields"].get("FrotaNome",""),
+        "item":         i["fields"].get("Item",""),
+        "categoria":    i["fields"].get("Categoria",""),
+        "avaliacao":    i["fields"].get("Avaliacao",""),
+        "foto_base64":  i["fields"].get("FotoBase64",""),
+        "foto_url":     i["fields"].get("FotoUrl",""),
+        "observacao":   i["fields"].get("Observacao",""),
+    } for i in items]
+    if checklist_id:
+        fotos = [f for f in fotos if f["checklist_id"] == checklist_id]
+    return fotos
+
 @st.cache_data(ttl=30)
 def carregar_pecas(checklist_id=""):
     items = lista_items(LISTA_PECAS)
@@ -563,6 +599,11 @@ with aba_novo:
                             cat, item = chave.split("||")
                             aval = itens.get(chave,"")
                             obs_item = itens.get(f"{chave}__obs","")
+                            try:
+                                foto_url = upload_foto_biblioteca(
+                                    frota["nome"], item, base64.b64decode(foto_b64))
+                            except Exception:
+                                foto_url = ""  # se o upload do arquivo falhar, segue só com o base64
                             criar_item(LISTA_FOTOS, {
                                 "Title":       f"{frota['nome']} — {item[:50]}",
                                 "ChecklistId": cl_id,
@@ -571,6 +612,7 @@ with aba_novo:
                                 "Categoria":   cat,
                                 "Avaliacao":   aval,
                                 "FotoBase64":  foto_b64[:3900],
+                                "FotoUrl":     foto_url,
                                 "Observacao":  obs_item,
                             })
                             time.sleep(0.1)
@@ -705,6 +747,24 @@ with aba_hist:
 
             if cl["obs"]:
                 st.markdown(f"**Obs gerais:** {cl['obs']}")
+
+            # Fotos deste checklist
+            try:
+                fotos_cl = [f for f in carregar_fotos(cl["id"]) if f["foto_base64"]]
+            except Exception:
+                fotos_cl = []
+            if fotos_cl:
+                st.markdown("**📷 Fotos:**")
+                cols_f = st.columns(min(len(fotos_cl), 4))
+                for i, foto in enumerate(fotos_cl):
+                    with cols_f[i % len(cols_f)]:
+                        try:
+                            st.image(base64.b64decode(foto["foto_base64"]),
+                                      caption=foto["item"][:40], use_container_width=True)
+                        except Exception:
+                            pass
+                        if foto["foto_url"]:
+                            st.markdown(f"[Abrir no SharePoint]({foto['foto_url']})")
 
 # ══════════════════════════════════════════════
 # ABA 3 — PEÇAS
