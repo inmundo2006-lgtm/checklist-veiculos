@@ -1,6 +1,7 @@
 import streamlit as st
 import streamlit.components.v1 as components
-import requests, json, time, base64, re
+import requests, json, time, base64, re, hashlib
+from html import escape as _esc
 from datetime import datetime
 import io
 from openpyxl import Workbook
@@ -27,6 +28,101 @@ TIPOS_VEICULO = ["Carro", "Caminhonete", "Van / Sprinter"]
 AVALIACOES    = ["✅ Bom", "⚠️ Regular", "❌ Ruim", "➖ Não tem"]
 AVAL_COR      = {"✅ Bom": "#d1fae5", "⚠️ Regular": "#fef3c7", "❌ Ruim": "#fee2e2", "➖ Não tem": "#f3f4f6"}
 AVAL_TX       = {"✅ Bom": "#065f46", "⚠️ Regular": "#92400e", "❌ Ruim": "#991b1b", "➖ Não tem": "#4b5563"}
+
+# ─────────────────────────────────────────────
+# CODEC DO CHECKLIST
+# O JSON com os 69 itens escritos por extenso dá ~4300 caracteres e a coluna
+# "Itens" aceita 4000 — salvar cortado quebrava o JSON e o histórico não
+# conseguia ler nenhum item. Aqui gravamos 1 caractere por item, na ordem de
+# itens_checklist.py, o que dá ~950 caracteres e cabe com folga.
+# ─────────────────────────────────────────────
+AVAL_COD = {"✅ Bom": "B", "⚠️ Regular": "R", "❌ Ruim": "X", "➖ Não tem": "N"}
+COD_AVAL = {v: k for k, v in AVAL_COD.items()}
+
+
+def flat_itens(tipo_veiculo=""):
+    """Lista achatada (categoria, item) na mesma ordem em que o checklist é exibido."""
+    cats = dict(ITENS_CHECKLIST)
+    if tipo_veiculo == "Van / Sprinter":
+        cats.update(ITENS_VAN)
+    return [(cat, item) for cat, lst in cats.items() for item in lst]
+
+
+def hash_itens(flat):
+    """Impressão digital da lista de itens — detecta se o template mudou
+    depois que um checklist antigo foi salvo."""
+    base = "|".join(f"{c}::{i}" for c, i in flat)
+    return hashlib.md5(base.encode("utf-8")).hexdigest()[:8]
+
+
+def codificar_itens(itens_state, tipo_veiculo=""):
+    flat = flat_itens(tipo_veiculo)
+    mask, obs = "", {}
+    for idx, (cat, item) in enumerate(flat):
+        mask += AVAL_COD.get(itens_state.get(f"{cat}||{item}", ""), "-")
+        o = (itens_state.get(f"{cat}||{item}__obs", "") or "").strip()
+        if o:
+            obs[str(idx)] = o[:300]
+    payload = {"v": 2, "h": hash_itens(flat), "tipo": tipo_veiculo, "m": mask, "o": obs}
+    txt = json.dumps(payload, ensure_ascii=False)
+    while len(txt) > 3900 and obs:      # se estourar, corta observação — nunca o gabarito
+        obs.pop(max(obs, key=lambda k: len(obs[k])))
+        payload["o"] = obs
+        txt = json.dumps(payload, ensure_ascii=False)
+    return txt
+
+
+def _completar(avals_raw, obs_raw, tipo_veiculo):
+    """Encaixa o que foi lido na lista completa de itens; o que faltar fica vazio."""
+    flat = flat_itens(tipo_veiculo)
+    avals = {f"{c}||{i}": avals_raw.get(f"{c}||{i}", "") for c, i in flat}
+    for k, v in avals_raw.items():
+        if k not in avals:
+            avals[k] = v
+    return avals, dict(obs_raw)
+
+
+def _split_antigo(d, tipo_veiculo):
+    avals = {k: v for k, v in d.items() if not k.endswith("__obs")}
+    obs   = {k[:-5]: v for k, v in d.items() if k.endswith("__obs")}
+    return _completar(avals, obs, tipo_veiculo)
+
+
+def decodificar_itens(raw, tipo_veiculo=""):
+    """Devolve (avaliações, observações, aviso). Entende o formato novo (v2),
+    o JSON antigo completo e o JSON antigo cortado no meio."""
+    if not raw:
+        return {}, {}, ""
+    try:
+        d = json.loads(raw)
+        if isinstance(d, dict) and d.get("v") == 2:
+            tipo  = d.get("tipo", tipo_veiculo)
+            flat  = flat_itens(tipo)
+            aviso = ""
+            if d.get("h") and d["h"] != hash_itens(flat):
+                aviso = ("A lista de itens mudou depois que este checklist foi salvo — "
+                         "as avaliações abaixo podem estar deslocadas.")
+            mask    = d.get("m", "")
+            obs_pos = d.get("o", {}) or {}
+            avals, obs = {}, {}
+            for idx, (cat, item) in enumerate(flat):
+                chave = f"{cat}||{item}"
+                avals[chave] = COD_AVAL.get(mask[idx] if idx < len(mask) else "-", "")
+                if obs_pos.get(str(idx)):
+                    obs[chave] = obs_pos[str(idx)]
+            return avals, obs, aviso
+        if isinstance(d, dict):
+            a, o = _split_antigo(d, tipo_veiculo)
+            return a, o, ""
+    except Exception:
+        pass
+    # JSON cortado no limite da coluna — recupera os pares que couberam
+    pares = dict(re.findall(r'"([^"]+?)"\s*:\s*"([^"]*)"', raw))
+    a, o = _split_antigo(pares, tipo_veiculo)
+    faltando = sum(1 for v in a.values() if not v)
+    aviso = (f"Checklist salvo antes da correção do limite da coluna: {faltando} item(ns) "
+             "não chegaram a ser gravados no SharePoint.") if faltando else ""
+    return a, o, aviso
 
 # ─────────────────────────────────────────────
 # GRAPH API
@@ -282,6 +378,26 @@ st.markdown("""
 .hist-card {
     background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px;
     padding:12px 16px; margin-bottom:10px;
+}
+.gab-cat {
+    font-size:12px; font-weight:700; color:#fff; background:#4b5563;
+    padding:5px 10px; border-radius:6px; margin:12px 0 2px;
+}
+.gab-row {
+    display:flex; align-items:flex-start; gap:10px;
+    padding:5px 8px; font-size:12.5px;
+    border-bottom:1px solid rgba(128,128,128,.18);
+}
+.gab-num  {min-width:24px; color:#9ca3af; font-variant-numeric:tabular-nums;}
+.gab-item {flex:1; line-height:1.35;}
+.gab-obs  {display:block; font-size:11px; color:#9ca3af; font-style:italic; margin-top:2px;}
+.gab-badge{
+    white-space:nowrap; border-radius:6px; padding:2px 8px;
+    font-size:11px; font-weight:600;
+}
+.gab-chip {
+    display:inline-block; border-radius:12px; padding:3px 10px;
+    margin:0 6px 6px 0; font-size:11.5px; font-weight:600;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -611,8 +727,8 @@ with aba_novo:
                 with st.spinner("Salvando no SharePoint..."):
                     try:
                         # Salva checklist principal
-                        item_json = json.dumps(
-                            {k:v for k,v in itens.items()}, ensure_ascii=False)
+                        item_json = codificar_itens(
+                            itens, st.session_state.tipo_veiculo)
                         novo = criar_item(LISTA_CHECKLIST, {
                             "Title":         f"{frota['nome']} — {datetime.now().strftime('%d/%m/%Y %H:%M')}",
                             "FrotaNome":     frota["nome"],
@@ -628,7 +744,7 @@ with aba_novo:
                             "KmAtual":       ident["km"],
                             "MotivoEntrada": ident["motivo"],
                             "Resultado":     resultado,
-                            "Itens":         item_json[:3900],  # limite SP
+                            "Itens":         item_json,  # já vem compacto, cabe na coluna
                             "Observacoes":   obs_g,
                             "Status":        "Concluído",
                         })
@@ -766,39 +882,75 @@ with aba_hist:
 
             st.markdown(f"**KM:** {cl['km']}  |  **Motivo:** {cl['motivo']}")
 
-            # Mostra itens com problema
+            # ── Gabarito completo do checklist ──────────
             try:
-                itens_dict = json.loads(cl["itens"]) if cl["itens"] else {}
-                problemas  = {k:v for k,v in itens_dict.items()
-                              if v in ("⚠️ Regular","❌ Ruim") and not k.endswith("__obs")}
-                if problemas:
-                    st.markdown("**Itens com problema:**")
-                    for chave, aval in problemas.items():
-                        parts = chave.split("||")
-                        item_nome = parts[1] if len(parts)>1 else chave
-                        obs_item  = itens_dict.get(f"{chave}__obs","")
-                        bg = AVAL_COR.get(aval,"#f3f4f6")
-                        tx = AVAL_TX.get(aval,"#374151")
-                        st.markdown(
-                            f'<div style="background:{bg};border-radius:6px;padding:5px 10px;'
-                            f'margin-bottom:4px;font-size:12px;color:{tx}">'
-                            f'<b>{aval}</b> — {item_nome}'
-                            f'{(" &nbsp;|&nbsp; " + obs_item) if obs_item else ""}</div>',
+                fotos_cl = carregar_fotos(cl["id"])
+            except Exception:
+                fotos_cl = []
+            com_foto = {f'{f["categoria"]}||{f["item"]}' for f in fotos_cl
+                        if f["foto_url"] or f["foto_base64"]}
+
+            avals, obs_itens, aviso = decodificar_itens(cl["itens"], cl["tipo_veiculo"])
+
+            if avals:
+                cont = {a: 0 for a in AVALIACOES}
+                nao_reg = 0
+                for v in avals.values():
+                    if v in cont:
+                        cont[v] += 1
+                    else:
+                        nao_reg += 1
+
+                chips = "".join(
+                    f'<span class="gab-chip" style="background:{AVAL_COR[a]};'
+                    f'color:{AVAL_TX[a]}">{a}: {cont[a]}</span>' for a in AVALIACOES)
+                if nao_reg:
+                    chips += (f'<span class="gab-chip" style="background:#e5e7eb;'
+                              f'color:#374151">Não registrado: {nao_reg}</span>')
+                st.markdown(f'<div style="margin:8px 0 2px">{chips}</div>',
                             unsafe_allow_html=True)
+
+                if aviso:
+                    st.caption(f"⚠️ {aviso}")
+
+                so_problemas = st.checkbox(
+                    "Mostrar só os itens com problema",
+                    key=f"gabfiltro_{cl['id']}")
+
+                linhas, cat_atual, idx = [], None, 0
+                for chave, aval in avals.items():
+                    cat, _, item = chave.partition("||")
+                    idx += 1
+                    if so_problemas and aval not in ("⚠️ Regular", "❌ Ruim"):
+                        continue
+                    if cat != cat_atual:
+                        cat_atual = cat
+                        linhas.append(f'<div class="gab-cat">{_esc(cat)}</div>')
+                    bg  = AVAL_COR.get(aval, "#e5e7eb")
+                    tx  = AVAL_TX.get(aval, "#6b7280")
+                    rot = aval if aval else "— não registrado"
+                    cam = " 📷" if chave in com_foto else ""
+                    o   = obs_itens.get(chave, "")
+                    obs_html = f'<span class="gab-obs">{_esc(o)}</span>' if o else ""
+                    linhas.append(
+                        f'<div class="gab-row">'
+                        f'<span class="gab-num">{idx:02d}</span>'
+                        f'<span class="gab-item">{_esc(item)}{cam}{obs_html}</span>'
+                        f'<span class="gab-badge" style="background:{bg};color:{tx}">{rot}</span>'
+                        f'</div>')
+
+                if linhas:
+                    st.markdown("".join(linhas), unsafe_allow_html=True)
                 else:
-                    st.success("Todos os itens aprovados")
-            except:
-                pass
+                    st.success("Nenhum item com problema neste checklist.")
+            else:
+                st.info("Este checklist não tem itens gravados.")
 
             if cl["obs"]:
                 st.markdown(f"**Obs gerais:** {cl['obs']}")
 
             # Fotos deste checklist
-            try:
-                fotos_cl = [f for f in carregar_fotos(cl["id"])
-                            if f["foto_url"] or f["foto_base64"]]
-            except Exception:
-                fotos_cl = []
+            fotos_cl = [f for f in fotos_cl if f["foto_url"] or f["foto_base64"]]
             if fotos_cl:
                 st.markdown("**📷 Fotos:**")
                 cols_f = st.columns(min(len(fotos_cl), 4))
