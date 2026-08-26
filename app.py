@@ -102,7 +102,47 @@ def upload_foto_biblioteca(frota_nome, item_nome, foto_bytes):
         headers={"Authorization": f"Bearer {get_token()}", "Content-Type": "image/jpeg"},
         data=foto_bytes)
     _checar(r)
-    return r.json().get("webUrl", "")
+    j = r.json()
+    return {"url": j.get("webUrl", ""), "id": j.get("id", "")}
+
+
+def _share_id(url: str) -> str:
+    """Converte a webUrl do arquivo no formato de shareId aceito pelo Graph."""
+    return "u!" + base64.urlsafe_b64encode(url.encode("utf-8")).decode("utf-8").rstrip("=")
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def baixar_foto(foto_url: str) -> bytes:
+    """Baixa os bytes reais da foto que está na biblioteca de documentos.
+    A webUrl do SharePoint exige login interativo, então ela nao pode ser usada
+    direto no st.image — aqui resolvemos o arquivo pelo Graph (token do app) e
+    devolvemos a imagem completa."""
+    if not foto_url:
+        return b""
+    try:
+        r = requests.get(
+            f"https://graph.microsoft.com/v1.0/shares/{_share_id(foto_url)}/driveItem",
+            headers={"Authorization": f"Bearer {get_token()}"}, timeout=30)
+        if r.status_code != 200:
+            return b""
+        download_url = r.json().get("@microsoft.graph.downloadUrl", "")
+        if not download_url:
+            return b""
+        rc = requests.get(download_url, timeout=60)
+        return rc.content if rc.status_code == 200 else b""
+    except Exception:
+        return b""
+
+
+def _b64_legado(txt: str) -> bytes:
+    """Fallback para registros antigos: o base64 foi cortado em 3900 chars,
+    então recuperamos o pedaço válido (a imagem vem incompleta)."""
+    if not txt:
+        return b""
+    try:
+        return base64.b64decode(txt[: len(txt) // 4 * 4])
+    except Exception:
+        return b""
 
 # ─────────────────────────────────────────────
 # CARREGAR FROTAS DO KANBAN
@@ -420,7 +460,7 @@ with aba_novo:
                     with foto_col:
                         foto = st.camera_input(f"📷 Foto (opcional)", key=key_foto)
                         if foto:
-                            fotos_state[f"{cat}||{item}"] = base64.b64encode(foto.read()).decode()
+                            fotos_state[f"{cat}||{item}"] = base64.b64encode(foto.getvalue()).decode()
                             st.success("Foto capturada ✅")
 
                 st.markdown('<hr style="margin:4px 0;border-color:#f3f4f6">', unsafe_allow_html=True)
@@ -600,10 +640,12 @@ with aba_novo:
                             aval = itens.get(chave,"")
                             obs_item = itens.get(f"{chave}__obs","")
                             try:
-                                foto_url = upload_foto_biblioteca(
+                                up = upload_foto_biblioteca(
                                     frota["nome"], item, base64.b64decode(foto_b64))
-                            except Exception:
-                                foto_url = ""  # se o upload do arquivo falhar, segue só com o base64
+                                foto_url = up["url"]
+                            except Exception as e:
+                                foto_url = ""
+                                st.warning(f"⚠️ A foto de '{item}' não subiu para a biblioteca: {e}")
                             criar_item(LISTA_FOTOS, {
                                 "Title":       f"{frota['nome']} — {item[:50]}",
                                 "ChecklistId": cl_id,
@@ -611,7 +653,10 @@ with aba_novo:
                                 "Item":        item,
                                 "Categoria":   cat,
                                 "Avaliacao":   aval,
-                                "FotoBase64":  foto_b64[:3900],
+                                # A coluna aceita no máximo 4000 chars — o base64 de uma foto
+                                # tem centenas de milhares. Guardar cortado gerava imagem
+                                # quebrada no histórico; a foto real fica na biblioteca.
+                                "FotoBase64":  "",
                                 "FotoUrl":     foto_url,
                                 "Observacao":  obs_item,
                             })
@@ -750,7 +795,8 @@ with aba_hist:
 
             # Fotos deste checklist
             try:
-                fotos_cl = [f for f in carregar_fotos(cl["id"]) if f["foto_base64"]]
+                fotos_cl = [f for f in carregar_fotos(cl["id"])
+                            if f["foto_url"] or f["foto_base64"]]
             except Exception:
                 fotos_cl = []
             if fotos_cl:
@@ -758,11 +804,11 @@ with aba_hist:
                 cols_f = st.columns(min(len(fotos_cl), 4))
                 for i, foto in enumerate(fotos_cl):
                     with cols_f[i % len(cols_f)]:
-                        try:
-                            st.image(base64.b64decode(foto["foto_base64"]),
-                                      caption=foto["item"][:40], use_container_width=True)
-                        except Exception:
-                            pass
+                        img = baixar_foto(foto["foto_url"]) or _b64_legado(foto["foto_base64"])
+                        if img:
+                            st.image(img, caption=foto["item"][:40], use_container_width=True)
+                        else:
+                            st.caption(f"📷 {foto['item'][:40]} — não foi possível carregar")
                         if foto["foto_url"]:
                             st.markdown(f"[Abrir no SharePoint]({foto['foto_url']})")
 
