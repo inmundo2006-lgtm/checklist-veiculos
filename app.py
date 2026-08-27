@@ -9,6 +9,9 @@ from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 
 from itens_checklist import ITENS_CHECKLIST, ITENS_VAN
+from integracao_os import (
+    TECNICOS_OFICINA, abrir_os_do_checklist, resolver_cod_cc,
+)
 
 # ─────────────────────────────────────────────
 st.set_page_config(page_title="Checklist Veículos", page_icon="🚗",
@@ -482,7 +485,13 @@ with aba_novo:
         st.divider()
         c1,c2,c3 = st.columns(3)
         with c1: operador = st.text_input("👤 Nome do operador / motorista")
-        with c2: inspetor  = st.text_input("🔍 Nome do inspetor")
+        with c2:
+            # Seleção, não texto livre: é este nome que vira o técnico
+            # responsável (e a comissão) da OS aberta na oficina.
+            nomes_tec = ["— Selecione —"] + [TECNICOS_OFICINA[k] for k in sorted(TECNICOS_OFICINA)]
+            inspetor = st.selectbox("🔍 Inspetor (mecânico da oficina)", nomes_tec)
+            cod_tec_inspetor = next(
+                (k for k, v in TECNICOS_OFICINA.items() if v == inspetor), None)
         with c3: km_atual  = st.number_input("🛣️ KM atual", min_value=0, step=1)
 
         motivo = st.selectbox("📝 Motivo da entrada na oficina", [
@@ -499,14 +508,15 @@ with aba_novo:
                 st.error("Selecione uma frota.")
             elif not operador.strip():
                 st.error("Informe o nome do operador.")
-            elif not inspetor.strip():
-                st.error("Informe o nome do inspetor.")
+            elif cod_tec_inspetor is None:
+                st.error("Selecione o inspetor.")
             else:
                 st.session_state.frota_selecionada = frota_obj
                 st.session_state.tipo_veiculo = tipo_v
                 st.session_state.dados_ident = {
                     "operador": operador.strip(),
                     "inspetor": inspetor.strip(),
+                    "cod_tecnico": cod_tec_inspetor,
                     "km": km_atual,
                     "motivo": motivo,
                 }
@@ -801,6 +811,20 @@ with aba_novo:
                         invalidar()
                         st.session_state.ultimo_checklist_id = cl_id
                         st.session_state.ultimo_resultado    = resultado
+                        # Contexto para a abertura de OS na etapa 4
+                        st.session_state.ctx_os = {
+                            "frota_nome":     frota["nome"],
+                            "cc_nome":        frota["cc_nome"],
+                            "chassi":         frota["chassi"],
+                            "inspetor":       ident["inspetor"],
+                            "cod_tecnico":    ident.get("cod_tecnico"),
+                            "itens_state":    dict(itens),
+                            "obs_gerais":     obs_g,
+                            "motivo":         ident["motivo"],
+                            "km":             ident["km"],
+                            "n_problemas":    len(itens_problema),
+                        }
+                        st.session_state.os_aberta = None
                         st.session_state.etapa = "concluido"
                         st.rerun()
                     except Exception as e:
@@ -824,12 +848,93 @@ with aba_novo:
             unsafe_allow_html=True)
         st.markdown(f"**Veículo:** {frota['nome']}  |  "
                     f"**Data:** {datetime.now().strftime('%d/%m/%Y %H:%M')}")
+
+        # ════════════════════════════════════════
+        #  ABRIR OS NO SISTEMA DA OFICINA
+        # ════════════════════════════════════════
+        ctx    = st.session_state.get("ctx_os") or {}
+        cl_id  = st.session_state.get("ultimo_checklist_id", "")
+        já_aberta = st.session_state.get("os_aberta")
+
+        if ctx and cl_id:
+            st.divider()
+
+            if já_aberta:
+                st.success(
+                    f"🔧 OS **{já_aberta['numero_os']}** aberta no sistema da oficina — "
+                    f"responsável: **{ctx.get('inspetor','—')}**"
+                )
+                if já_aberta.get("cc_pendente"):
+                    st.warning(
+                        f"⚠️ O centro de custo **{ctx.get('cc_nome') or '—'}** não existe no "
+                        "cadastro da oficina. A OS foi criada mesmo assim, mas o supervisor "
+                        "precisa corrigir o centro de custo antes de aprovar."
+                    )
+            else:
+                st.markdown("**🔧 Deseja abrir uma OS no sistema da oficina?**")
+                n_prob = ctx.get("n_problemas", 0)
+                st.caption(
+                    f"A OS será interna, com {n_prob} item(ns) de problema já preenchidos "
+                    f"no campo Avaliação, e ficará sob responsabilidade de "
+                    f"{ctx.get('inspetor','—')}."
+                )
+
+                cod_cc_prev, cc_txt = resolver_cod_cc(ctx.get("cc_nome", ""))
+                if cod_cc_prev is None and ctx.get("cc_nome"):
+                    st.warning(
+                        f"⚠️ O centro de custo **{ctx['cc_nome']}** não foi reconhecido no "
+                        "cadastro da oficina. Você pode abrir a OS assim mesmo — ela ficará "
+                        "marcada para o supervisor corrigir."
+                    )
+
+                col_sim, col_nao = st.columns(2)
+                with col_sim:
+                    if st.button("✅ Sim, abrir OS", type="primary",
+                                 use_container_width=True, key="btn_abrir_os"):
+                        with st.spinner("Abrindo OS no sistema da oficina..."):
+                            try:
+                                nova = abrir_os_do_checklist(
+                                    frota_nome=ctx["frota_nome"],
+                                    cc_nome=ctx["cc_nome"],
+                                    chassi=ctx.get("chassi", ""),
+                                    nome_inspetor=ctx["inspetor"],
+                                    cod_tecnico=ctx.get("cod_tecnico"),
+                                    itens_state=ctx["itens_state"],
+                                    observacoes_gerais=ctx.get("obs_gerais", ""),
+                                    motivo_entrada=ctx.get("motivo", ""),
+                                    km=ctx.get("km"),
+                                    checklist_id=cl_id,
+                                )
+                                # Grava o número da OS de volta no checklist —
+                                # é o que impede o mesmo checklist de gerar
+                                # uma segunda OS se a tela for recarregada.
+                                try:
+                                    patch_item(LISTA_CHECKLIST, cl_id,
+                                               {"OSNumero": nova["numero_os"]})
+                                except Exception as e:
+                                    st.warning(
+                                        f"OS criada, mas não consegui gravar o número no "
+                                        f"checklist: {e}"
+                                    )
+                                st.session_state.os_aberta = nova
+                                invalidar()
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Não foi possível abrir a OS: {e}")
+                with col_nao:
+                    if st.button("Não, obrigado", use_container_width=True,
+                                 key="btn_nao_abrir_os"):
+                        st.session_state.ctx_os = None
+                        st.rerun()
+
         st.divider()
         if st.button("➕ Novo Checklist", type="primary", use_container_width=True):
             st.session_state.etapa = "identificacao"
             st.session_state.checklist_itens = {}
             st.session_state.fotos = {}
             st.session_state.frota_selecionada = None
+            st.session_state.ctx_os = None
+            st.session_state.os_aberta = None
             st.rerun()
 
 # ══════════════════════════════════════════════
